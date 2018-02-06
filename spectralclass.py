@@ -50,7 +50,7 @@ class Spectrum :
         self.hascontinuum = False
         
         try :
-            if self.filepath.endswith(".m.fits.gz") or self.filepath.endswith(".m.fits"):
+            if self.filepath.endswith("m.fits.gz") or self.filepath.endswith("m.fits"):
                 self.wl,self.flux,self.fluxerr=self.loadSpectrumFromMFITS(self.filepath, self.spectype, self.telluric, self.helio, sort=Sort)
             elif self.filepath.endswith(".pol.fits.gz") or self.filepath.endswith(".pol.fits") :
                 self.wl,self.flux,self.fluxerr=self.loadSpectrumFromPOLFITS(self.filepath, self.spectype, polar, self.telluric, self.helio, sort=Sort)
@@ -62,7 +62,10 @@ class Spectrum :
         except :
             print "Error: could not open file: ",self.filepath
             exit()
-
+        
+        # Calculate approximate wavelength sampling
+        self.wlsampling = (self.wl[-1] - self.wl[0])/len(self.wl)
+            
     #--- Function to load spectrum from .s.fits file
     def loadSpectrumFromSFITS(self, fitsfilename, sort=False):
         
@@ -204,7 +207,12 @@ class Spectrum :
     #------------
     
     #--- resampling spectrum
-    def resampling(self, wlsampling, wl0, wlf) :
+    def resampling(self, wlsampling, wl0=0.0, wlf=0.0) :
+        self.wlsampling = wlsampling
+        if wl0 == 0.0:
+            wl0 = self.wl[0]
+        if wlf == 0.0:
+            wlf = self.wl[-1]
         npoints = int((wlf-wl0)/wlsampling)
         wl_new = np.linspace(wl0, wlf, npoints)
         flux_new = np.interp(wl_new, self.wl, self.flux)
@@ -316,7 +324,7 @@ class Spectrum :
         flux_new = []
         fluxvar_new = []
 
-        for i in range(1, len(bins)):
+        for i in range(0, len(bins)):
             if len(self.wl[digitized == i]) :
                 try:
                     wl_new.append(self.wl[digitized == i].mean())
@@ -360,7 +368,7 @@ class Spectrum :
         fluxvar_new = []
         orders_new = []
         
-        for i in range(1, len(npbins)):
+        for i in range(0, len(npbins)):
             if len(self.wl[ordermask][digitized == i]) :
                 try:
                     wl_new.append(self.wl[ordermask][digitized == i].mean())
@@ -481,11 +489,24 @@ class Spectrum :
             self.header['HERVCORR'] = self.helio
             self.header['SPECTYPE'] = self.spectype
             self.header['SOURCERV'] = self.sourceRV
+            
+            self.header['APNUM1'] = '1 1     '
+            self.header['WCSDIM'] = 1
+            self.header['CUNIT1'] = 'nm '
+            self.header['CTYPE1'] = 'LINEAR  '
+            self.header['CRVAL1'] = self.wl[0]
+            self.header['CRPIX1'] = 1.0
+            self.header['CDELT1'] = self.wlsampling
+            self.header['CD1_1'] = self.wlsampling
+            self.header['LTM1_1'] = 1.
+            self.header['WAT0_001'] = 'system=equispec'
+            self.header['WAT1_001'] = 'wtype=linear'
+            self.header['DC-FLAG'] = 0
+    
+            #self.header.set('COL1','Flux', 'flux (electron)')
+            #self.header.set('COL2','Wavelength', 'wavelength (nm)')
 
-            self.header.set('COL1','Wavelength', 'wavelength (nm)')
-            self.header.set('COL2','Flux', 'flux (electron)')
-            self.header.set('COL3','FluxError', 'flux error (electron)')
-
+            self.header.remove('COL3')
             self.header.remove('COL4')
             self.header.remove('COL5')
             self.header.remove('COL6')
@@ -499,23 +520,14 @@ class Spectrum :
             self.header.remove('COL14')
             
             scidata = []
-            scidata.append(self.wl)
             scidata.append(self.flux)
-            scidata.append(self.fluxerr)
+            scidata.append(self.wl)
             
             if os.path.exists(output) :
                 os.remove(output)
             fits.writeto(output, scidata, self.header)
     
         elif format == 'ascii' :
-            
-            '''
-            from astropy.io import ascii
-            scidata = []
-            scidata.append(self.wl)
-            scidata.append(self.flux)
-            ascii.write(scidata, output)
-            '''
             
             f = open(output, 'w')
             strdata = ''

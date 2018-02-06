@@ -13,7 +13,7 @@
     
     Simple usage example:
     
-    python $PATH/App_export.py --input=spectrum.m.fits.gz --output=spectrum.fits --rvsampling=2.0 --spectype=fcal -tr
+    python $PATH/App_export.py --input=spectrum.m.fits.gz --output=spectrum.s.fits --rvsampling=2.0 --spectype=fcal -tr
     """
 
 __version__ = "1.0"
@@ -25,9 +25,7 @@ __copyright__ = """
 from optparse import OptionParser
 import os,sys
 from spectralclass import Spectrum
-from spectralclass import SpectrumChunk
-import espectrolib
-
+from scipy import constants
 import matplotlib.pyplot as plt
 
 parser = OptionParser()
@@ -65,11 +63,16 @@ if options.wavemask :
 
 spc.sortByWavelength()
 
-spc.binning(float(options.rvsampling), median=False)
-
 if options.output.endswith(".fits") :
+    
+    wlsampling = (float(options.rvsampling)*1000.0/constants.c)*(spc.wl[-1] + spc.wl[0])/2.0
+    spc.resampling(wlsampling)
     spc.saveToFile(options.output, format='fits')
+
 elif options.output.endswith(".txt") :
+    
+    spc.binning(float(options.rvsampling), median=False)
     spc.saveToFile(options.output, format='ascii')
+
 else :
     spc.printdata(printerrors=False)
