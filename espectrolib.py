@@ -179,7 +179,7 @@ def generateList(directory, objectname="", objectkey="OBJECT"):
                or filename.endswith("m.fits") or filename.endswith("pol.fits"):
                 header = getheader(filepath.rstrip('\n'),0)
                 objname = header[objectkey]
-                if objname == objectname or objectname == "":
+                if objname.replace(" ","") == objectname.replace(" ","") or objectname == "":
                     file_paths.append(filepath)
 
     file_paths.sort()
