@@ -18,6 +18,8 @@ from scipy import stats
 from scipy.signal import medfilt
 import copy
 
+from astropy import time, coordinates as coord, units as u
+
 ########## SPECTRUM CLASS ############
 class Spectrum :
     'Common base class for a spectrum'
@@ -287,8 +289,100 @@ class Spectrum :
 
     #--- Get time from img header
     def getTimeHJDTT(self) :
-        header = fits.getheader(self.filepath,0)
-        return header['HJDTT']
+        return self.header['HJDTT']
+    #------------
+
+    #--- Load object coordinates
+    def objectCoords(self) :
+        if self.header['INSTRUME'] == 'GRACES' :
+            self.ra  = float(self.header['RA'])
+            self.dec  = float(self.header['DEC'])
+        elif self.header['INSTRUME'] == 'ESPaDOnS' :
+            self.ra  = float(self.header['RA_DEG'])
+            self.dec  = float(self.header['DEC_DEG'])
+        else :
+            print "Instrument", self.header['INSTRUME']," not supported to load object coordinates."
+            exit()
+        
+        self.obj_coord = coord.SkyCoord(self.ra,self.dec,unit=(u.deg, u.deg), frame='icrs')
+        return self.obj_coord
+    #------------
+
+    #--- Load observatory location
+    def observatoryLocation(self) :
+        
+        if self.header['INSTRUME'] == 'GRACES' :
+            self.observatory_location = coord.EarthLocation.of_site("gemini_north")
+        elif self.header['INSTRUME'] == 'ESPaDOnS' :
+            self.observatory_location = coord.EarthLocation.of_site("cfht")
+        #elif self.header['INSTRUME'] == 'ADD_ANOTHER_INSTRUMENT' :
+        #   self.longitude  = -155.47166666666666
+        #   self.latitude  = 19.82666666666667
+        #   self.altitude  = 4215.000000000727
+        #   observatory_location = coord.EarthLocation.from_geodetic(longitude, latitude, altitude)
+        else :
+            print "Instrument", self.header['INSTRUME']," not supported to load observatory location."
+            exit()
+
+        return self.observatory_location
+    #------------
+    
+    #--- Load MJD time
+    def mjdTime(self) :
+        
+        try: self.observatory_location
+        except: self.observatoryLocation()
+        
+        if self.header['INSTRUME'] == 'GRACES' :
+            
+            UTtimeOpenShutter = time.Time(self.header['SHUTOPEN'], format='isot', scale='utc')
+            UTtimeCloseShutter = time.Time(self.header['SHUTCLOS'], format='isot', scale='utc')
+        
+            dt = UTtimeCloseShutter - UTtimeOpenShutter
+        
+            self.UTTime = UTtimeOpenShutter + dt / 2.0
+        
+            self.MJDTime = time.Time(self.UTTime.mjd, format='mjd', scale='utc', location=self.observatory_location)
+        
+        elif self.header['INSTRUME'] == 'ESPaDOnS':
+            
+            mjdstart = float(self.header['MJDATE'])
+            mjdend = float(self.header['MJDEND'])
+            
+            mjdstart = time.Time(mjdstart, format='mjd', scale='utc', location=self.observatory_location)
+            mjdend = time.Time(mjdend, format='mjd', scale='utc', location=self.observatory_location)
+            
+            dt = mjdend - mjdstart
+
+            self.MJDTime = mjdstart + dt / 2.0
+        else :
+            print "Instrument", self.header['INSTRUME']," not supported to load MJD date."
+            exit()
+        
+        return self.MJDTime
+    #------------
+
+    #--- Calculate barycentric / heliocentric time
+    def barycentricTime(self) :
+        
+        try: self.obj_coord
+        except: self.objectCoords()
+    
+        try: self.MJDTime
+        except: self.mjdTime()
+
+        # Calculate light travel time (ltt) with respect to the barycentre of Solar System:
+        ltt_bary = self.MJDTime.light_travel_time(self.obj_coord)
+        # Below is for a more precise determination of ltt using JPL ephemeris
+        #ltt_bary_jpl = self.UTTime.light_travel_time(obj_coord, ephemeris='jpl')
+        
+        self.BarycentricTime = self.MJDTime + ltt_bary
+
+        # Below it also calculates the Heliocentric Julian date in case someone needs it.
+        ltt_helio = self.MJDTime.light_travel_time(self.obj_coord, 'heliocentric')
+        self.HeliocentricTime = self.MJDTime + ltt_helio
+        
+        return self.BarycentricTime
     #------------
 
     #--- Mask data

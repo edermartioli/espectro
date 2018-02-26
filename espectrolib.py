@@ -152,7 +152,7 @@ def gaussfunc(x, *params):
 #####
 
 ######################
-def generateList(directory, objectname, objectkey="OBJECT"):
+def generateList(directory, objectname="", objectkey="OBJECT"):
     
     """
     Generates a list of file names in a directory tree
@@ -179,7 +179,7 @@ def generateList(directory, objectname, objectkey="OBJECT"):
                or filename.endswith("m.fits") or filename.endswith("pol.fits"):
                 header = getheader(filepath.rstrip('\n'),0)
                 objname = header[objectkey]
-                if objname == objectname :
+                if objname == objectname or objectname == "":
                     file_paths.append(filepath)
 
     file_paths.sort()
