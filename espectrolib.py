@@ -283,7 +283,8 @@ def continuum(wl, flux, binsize = 30, overlap = 20, sigmaclip = 2.5, window = 3,
         
         medflux = np.median(fluxtmp)
         medfluxdev = np.median(np.abs(fluxtmp - medflux))
-        filtermask = np.where(np.logical_and(fluxtmp > medflux, fluxtmp < medflux + sigmaclip*medfluxdev))
+        medfluxsup = medflux + sigmaclip*medfluxdev
+        filtermask = np.where(np.logical_and(fluxtmp > medflux, fluxtmp < medfluxsup))
         
         withinLine = False
         for line in lines :

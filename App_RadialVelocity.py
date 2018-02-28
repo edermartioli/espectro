@@ -13,7 +13,7 @@
     INPE / Laboratorio Nacional de Astrofisica, Brazil.
     
     Simple usage example:
-    python $PATH/App_RadialVelocity.py --inputdir=./espectrosflux/ --spectype=norm --object="AM Her" -tr
+    python $PATH/App_RadialVelocity.py --inputdir=./espectrosflux/ --spectype=raw --object="AM Her" -tr
     """
 
 __version__ = "1.0"
@@ -29,6 +29,8 @@ from spectralclass import SpectrumChunk
 import espectrolib
 
 import numpy as np
+import matplotlib.pyplot as plt
+from astropy.io import fits
 
 ################################################################################
 #--- iSpec directory -------------------------------------------------------------
@@ -37,6 +39,40 @@ ispec_dir = './iSpec_v20161118/'
 sys.path.insert(0, os.path.abspath(ispec_dir))
 import ispec
 ################################################################################
+
+#--- Function to write cross-correlation plot to output fits ---------
+def writeoutputfits(ccf,filename,rv,rv_err,bjd):
+    
+    if ".fits.gz" in filename :
+        basename = os.path.splitext(os.path.splitext(filename)[0])[0]
+    elif ".fits" in filename :
+        basename = os.path.splitext(filename)[0]
+
+    outputfits = basename + ".rv.fits"
+
+    scidata = []
+    scidata.append(np.array(ccf['x']))
+    scidata.append(np.array(ccf['y']))
+    scidata.append(np.array(ccf['err']))
+
+    hdu = fits.PrimaryHDU(scidata)
+    hdulist = fits.HDUList([hdu])
+    hdulist[0].header.set('BJD',np.round(bjd,7), 'barycentric julian date (d)')
+
+    hdulist[0].header.set('RV',rv, 'radial velocity (kps)')
+    hdulist[0].header.set('RVERR',rv_err, 'radial velocity error (kps)')
+
+    hdulist[0].header.set('COL1','Radial Velocity', 'radial velocity (kps)')
+    hdulist[0].header.set('COL2','Cross-correlation', 'cross-correlation')
+    hdulist[0].header.set('COL3','Cross-correlation Error', 'cross-correlation error')
+
+    hdulist[0].header['COMMENT'] = "Data processed by ESPECTRO 1.0 -> App_RadialVelocity.py"
+
+    if os.path.exists(outputfits) :
+        os.remove(outputfits)
+    hdulist.writeto(outputfits)
+#-------
+
 
 #--- Calculate barycentric velocity correction from observation date/coordinates ---------
 def barycentric_velocity(spc):
@@ -81,10 +117,27 @@ if options.verbose:
     print 'Spectrum type: ', options.spectype
     print 'Telluric correction: ', options.telluric
 
+velocity_step = 0.2
+
 filelist = espectrolib.generateList(options.inputdir, options.object)
 
-mask_file = ispec_dir + "input/linelists/CCF/Narval.Sun.370_1048nm/mask.lst"
+#mask_file = ispec_dir + "input/linelists/CCF/Narval.Sun.370_1048nm/mask.lst"
+#mask_file = ispec_dir + "input/linelists/CCF/Atlas.Arcturus.372_926nm/mask.lst""
+#mask_file = ispec_dir + "input/linelists/CCF/Atlas.Sun.372_926nm/mask.lst"
+#mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.A0.350_1095nm/mask.lst"
+#mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.F0.360_698nm/mask.lst"
+mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.G2.375_679nm/mask.lst"
+#mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.K0.378_679nm/mask.lst"
+#mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.K5.378_680nm/mask.lst"
+#mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.M5.400_687nm/mask.lst"
+#mask_file = ispec_dir + "input/linelists/CCF/Synthetic.Sun.350_1100nm/mask.lst"
+#mask_file = ispec_dir + "input/linelists/CCF/VALD.Sun.300_1100nm/mask.lst"
+
 ccf_mask = ispec.read_cross_correlation_mask(mask_file)
+
+telluric_linelist_file = ispec_dir + "/input/linelists/CCF/Synth.Tellurics.500_1100nm/mask.lst"
+telluric_linelist = ispec.read_telluric_linelist(telluric_linelist_file, minimum_depth=0.0)
+
 resolution = 80000
 
 output = []
@@ -102,37 +155,62 @@ for filepath in filelist :
     barycentric_vel = barycentric_velocity(spc)
     if options.verbose: print "Barycentric velocity correction: ",barycentric_vel
 
-    if options.verbose: print "Calculating continuum, binning and sorting data ..."
-    spc.continuumOrderByOrder(binsize = 30, overlap = 10)
-    spc.normalizeByContinuum(constant=10.0)
+    if options.spectype != "norm" :
+        if options.verbose: print "Calculating continuum and normalizing spectrum ..."
+        spc.continuumOrderByOrder(binsize = 30, overlap = 10)
+        spc.normalizeByContinuum(constant=10.0)
+
+    if options.verbose: print "Binning and sorting the data ..."
     spc.binningOrderByOrder(rvsampling_kps=2.4, median=False)
     spc.sortByWavelength()
-    
-    #ispectrum = barycentric_velocity_corrected_spectrum(spc)
+
     ispectrum = ispec.create_spectrum_structure(spc.wl,spc.flux)
     
     if options.verbose: print "Smoothing out spectrum to resolution: ", resolution
     smoothed_star_spectrum = ispec.convolve_spectrum(ispectrum, resolution)
 
+
+    if options.verbose: print "Calculating RV shift from telluric lines ..."
+    tel_models, tel_ccf = ispec.cross_correlate_with_mask(smoothed_star_spectrum, telluric_linelist, \
+                                              lower_velocity_limit=-10, upper_velocity_limit=10, \
+                                              velocity_step=0.1, mask_depth=0.01, \
+                                              fourier = False,
+                                              only_one_peak = True)
+    
+    tel_rv = tel_models[0].mu()
+    tel_rv_err = tel_models[0].emu()
+    #plt.errorbar(tel_ccf['x'],tel_ccf['y'],yerr=tel_ccf['err'], fmt='o')
+
+    if options.verbose: print "Telluric RV shift = ",tel_rv,"+/-",tel_rv_err
+
+    #--- Correcting telluric shift -------------------------------------------
+    if options.verbose: print "Correcting RV shift calculated from telluric lines ..."
+    corrected_spectrum = ispec.correct_velocity(smoothed_star_spectrum, tel_rv)
+    #-----
+
     #--- Correcting barycentric velocity -------------------------------------------
     if options.verbose: print "Correcting barycentric velocity ..."
-    corrected_spectrum = ispec.correct_velocity(smoothed_star_spectrum, -barycentric_vel)
+    corrected_spectrum = ispec.correct_velocity(corrected_spectrum, -barycentric_vel)
     #-----
 
     if options.verbose: print "Calculating radial velocity by cross-correlation with mask ..."
-    models, ccf = ispec.cross_correlate_with_mask(smoothed_star_spectrum, ccf_mask, \
+    models, ccf = ispec.cross_correlate_with_mask(corrected_spectrum, ccf_mask, \
                                               lower_velocity_limit=-100, upper_velocity_limit=100, \
-                                              velocity_step=0.1, mask_depth=0.01, \
+                                              velocity_step=velocity_step, mask_depth=0.01, \
                                               fourier=False)
     rv = models[0].mu()
     rv_err = models[0].emu()
+    plt.errorbar(ccf['x'],ccf['y'],yerr=ccf['err'], fmt='o')
+
+    if options.verbose: print "RV shift = ",rv,"+/-",rv_err
+
+    writeoutputfits(ccf, filename, rv, rv_err, barycentricTime.jd)
 
     if options.verbose:
         print "Writing output:"
         print filename, spc.object.replace(" ",""), np.round(barycentricTime.jd, 6), np.round(rv, 5), np.round(rv_err, 3)
     
     output.append([filename, spc.object.replace(" ",""), barycentricTime.jd, rv, rv_err])
-
 
 for result in output :
     print result[0], result[1], np.round(result[2], 6), np.round(result[3], 5), np.round(result[4], 3)
