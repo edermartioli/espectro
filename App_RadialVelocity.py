@@ -99,6 +99,53 @@ def barycentric_velocity(spc):
     return barycentric_vel
 #-------
 
+#--- Load template spectrum for cross correlation ---------
+def loadtemplatespectrum(filename, resolution, telluric_linelist, ccf_mask, velocity_step):
+    
+    spc = Spectrum(filename)
+    
+    barycentricTime = spc.barycentricTime()
+    barycentric_vel = barycentric_velocity(spc)
+    
+    spc.continuumOrderByOrder(binsize = 30, overlap = 10)
+    spc.normalizeByContinuum(constant=10.0)
+    spc.binningOrderByOrder(rvsampling_kps=2.4, median=False)
+    spc.sortByWavelength()
+
+    ispectrum = ispec.create_spectrum_structure(spc.wl,spc.flux)
+    smoothed_spectrum = ispec.convolve_spectrum(ispectrum, resolution)
+
+    tel_models, tel_ccf = ispec.cross_correlate_with_mask(smoothed_spectrum, telluric_linelist, \
+                                                        lower_velocity_limit=-10, upper_velocity_limit=10, \
+                                                        velocity_step=0.1, mask_depth=0.01, \
+                                                        fourier = False, only_one_peak = True)
+    tel_rv = tel_models[0].mu()
+    
+    min_vel = -30.0
+    max_vel = +30.0
+    # Only the 25% of the deepest ones:
+    dfilter = telluric_linelist['depth'] > np.percentile(telluric_linelist['depth'], 75)
+    tfilter = ispec.create_filter_for_regions_affected_by_tellurics(smoothed_spectrum['waveobs'], \
+                                                                    telluric_linelist[dfilter], min_velocity=-tel_rv+min_vel, \
+                                                                    max_velocity=-tel_rv+max_vel)
+    
+    
+    clean_spectrum = smoothed_spectrum[~tfilter]
+
+
+    corrected_spectrum = ispec.correct_velocity(clean_spectrum, tel_rv - barycentric_vel)
+
+    models, ccf = ispec.cross_correlate_with_mask(clean_spectrum, ccf_mask, \
+                                                  lower_velocity_limit=-100, upper_velocity_limit=100, \
+                                                  velocity_step=velocity_step, mask_depth=0.01, \
+                                                  fourier=False)
+    rv = models[0].mu()
+
+    clean_corrected_spectrum = ispec.correct_velocity(corrected_spectrum, rv)
+
+    return clean_corrected_spectrum
+#-------
+
 parser = OptionParser()
 parser.add_option("-i", "--inputdir", dest="inputdir", help="Input directory with spectral data",type='string', default="")
 parser.add_option("-o", "--object", dest="object", help="Object name",type='string', default="")
@@ -126,19 +173,25 @@ filelist = espectrolib.generateList(options.inputdir, options.object)
 #mask_file = ispec_dir + "input/linelists/CCF/Atlas.Sun.372_926nm/mask.lst"
 #mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.A0.350_1095nm/mask.lst"
 #mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.F0.360_698nm/mask.lst"
-mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.G2.375_679nm/mask.lst"
+#mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.G2.375_679nm/mask.lst"
 #mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.K0.378_679nm/mask.lst"
 #mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.K5.378_680nm/mask.lst"
 #mask_file = ispec_dir + "input/linelists/CCF/HARPS_SOPHIE.M5.400_687nm/mask.lst"
 #mask_file = ispec_dir + "input/linelists/CCF/Synthetic.Sun.350_1100nm/mask.lst"
-#mask_file = ispec_dir + "input/linelists/CCF/VALD.Sun.300_1100nm/mask.lst"
+mask_file = ispec_dir + "input/linelists/CCF/VALD.Sun.300_1100nm/mask.lst"
 
 ccf_mask = ispec.read_cross_correlation_mask(mask_file)
 
 telluric_linelist_file = ispec_dir + "/input/linelists/CCF/Synth.Tellurics.500_1100nm/mask.lst"
 telluric_linelist = ispec.read_telluric_linelist(telluric_linelist_file, minimum_depth=0.0)
 
-resolution = 80000
+resolution = 65000
+
+#--- Below it loads and sets up the template spectrum ---------
+#templatefile = "/Users/edermartioli/Desktop/51Peg/testdata/1603681o.m.fits.gz"
+templatefile = "/Users/edermartioli/Desktop/51Peg/testdata/1604052o.m.fits.gz"
+templatespectrum = loadtemplatespectrum(templatefile, resolution, telluric_linelist, ccf_mask, velocity_step)
+#---------------
 
 output = []
 
@@ -165,7 +218,8 @@ for filepath in filelist :
     spc.sortByWavelength()
 
     ispectrum = ispec.create_spectrum_structure(spc.wl,spc.flux)
-    
+
+
     if options.verbose: print "Smoothing out spectrum to resolution: ", resolution
     smoothed_star_spectrum = ispec.convolve_spectrum(ispectrum, resolution)
 
@@ -174,8 +228,7 @@ for filepath in filelist :
     tel_models, tel_ccf = ispec.cross_correlate_with_mask(smoothed_star_spectrum, telluric_linelist, \
                                               lower_velocity_limit=-10, upper_velocity_limit=10, \
                                               velocity_step=0.1, mask_depth=0.01, \
-                                              fourier = False,
-                                              only_one_peak = True)
+                                              fourier = False, only_one_peak = True)
     
     tel_rv = tel_models[0].mu()
     tel_rv_err = tel_models[0].emu()
@@ -183,26 +236,54 @@ for filepath in filelist :
 
     if options.verbose: print "Telluric RV shift = ",tel_rv,"+/-",tel_rv_err
 
+    min_vel = -30.0
+    max_vel = +30.0
+    # Only the 25% of the deepest ones:
+    dfilter = telluric_linelist['depth'] > np.percentile(telluric_linelist['depth'], 75)
+    tfilter = ispec.create_filter_for_regions_affected_by_tellurics(smoothed_star_spectrum['waveobs'], \
+                                                                    telluric_linelist[dfilter], min_velocity=-tel_rv+min_vel, \
+                                                                    max_velocity=-tel_rv+max_vel)
+        
+                                                                    
+    clean_spectrum = smoothed_star_spectrum[~tfilter]
+                                                                    
+
     #--- Correcting telluric shift -------------------------------------------
     if options.verbose: print "Correcting RV shift calculated from telluric lines ..."
-    corrected_spectrum = ispec.correct_velocity(smoothed_star_spectrum, tel_rv)
+    corrected_spectrum = ispec.correct_velocity(clean_spectrum, tel_rv)
     #-----
 
     #--- Correcting barycentric velocity -------------------------------------------
     if options.verbose: print "Correcting barycentric velocity ..."
     corrected_spectrum = ispec.correct_velocity(corrected_spectrum, -barycentric_vel)
     #-----
-
-    if options.verbose: print "Calculating radial velocity by cross-correlation with mask ..."
+    '''
     models, ccf = ispec.cross_correlate_with_mask(corrected_spectrum, ccf_mask, \
-                                              lower_velocity_limit=-100, upper_velocity_limit=100, \
-                                              velocity_step=velocity_step, mask_depth=0.01, \
-                                              fourier=False)
-    rv = models[0].mu()
-    rv_err = models[0].emu()
+                                                  lower_velocity_limit=-100, upper_velocity_limit=100, \
+                                                  velocity_step=velocity_step, mask_depth=0.01, \
+                                                  fourier=False)
+
     plt.errorbar(ccf['x'],ccf['y'],yerr=ccf['err'], fmt='o')
 
+    rv = models[0].mu()
+    rv_err = models[0].emu()
+
     if options.verbose: print "RV shift = ",rv,"+/-",rv_err
+    '''
+
+    if options.verbose: print "Calculating radial velocity by cross-correlation with mask ..."
+    models, ccf = ispec.cross_correlate_with_template(corrected_spectrum, templatespectrum, \
+                                              lower_velocity_limit=-100, upper_velocity_limit=100, \
+                                              velocity_step=velocity_step, fourier=False)
+
+    rv = models[0].mu()
+    rv_err = models[0].emu()
+
+    #plt.errorbar(ccf['x'],ccf['y'],yerr=ccf['err'], fmt='o')
+
+    if options.verbose: print "RV shift = ",rv,"+/-",rv_err
+
+    #plt.show()
 
     writeoutputfits(ccf, filename, rv, rv_err, barycentricTime.jd)
 
