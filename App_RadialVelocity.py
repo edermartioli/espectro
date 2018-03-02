@@ -94,25 +94,29 @@ def barycentric_velocity(spc):
     # Project velocity toward star
     barycentric_vel = ispec.calculate_barycentric_velocity_correction((year, month, day, \
                                                                        hours, minutes, seconds), (ra_hours, ra_minutes, \
-                                                                                                  ra_seconds, dec_degrees, dec_minutes, dec_seconds))
+                                                                       ra_seconds, dec_degrees, dec_minutes, dec_seconds))
                                                                                                   
     return barycentric_vel
 #-------
 
 #--- Load template spectrum for cross correlation ---------
-def loadtemplatespectrum(filename, resolution, telluric_linelist, ccf_mask, velocity_step):
+def loadtemplatespectrum(filename, resolution, telluric_linelist, ccf_mask, velocity_step, wavemask):
     
     spc = Spectrum(filename)
-    
+    if wavemask :
+        spc.applyMask(wavemask)
+
     barycentricTime = spc.barycentricTime()
     barycentric_vel = barycentric_velocity(spc)
     
     spc.continuumOrderByOrder(binsize = 30, overlap = 10)
     spc.normalizeByContinuum(constant=10.0)
+    
     spc.binningOrderByOrder(rvsampling_kps=2.4, median=False)
     spc.sortByWavelength()
 
     ispectrum = ispec.create_spectrum_structure(spc.wl,spc.flux)
+
     smoothed_spectrum = ispec.convolve_spectrum(ispectrum, resolution)
 
     tel_models, tel_ccf = ispec.cross_correlate_with_mask(smoothed_spectrum, telluric_linelist, \
@@ -150,8 +154,9 @@ parser = OptionParser()
 parser.add_option("-i", "--inputdir", dest="inputdir", help="Input directory with spectral data",type='string', default="")
 parser.add_option("-o", "--object", dest="object", help="Object name",type='string', default="")
 parser.add_option("-s", "--spectype", dest="spectype", help="Spectrum type: raw, norm, or fcal",type='string', default="raw")
+parser.add_option("-m", "--wavemask", dest="wavemask", help="File with each order wavelength range",type='string', default="")
+parser.add_option("-t", "--template", dest="template", help="Input template spectrum",type='string', default="")
 parser.add_option("-v", action="store_true", dest="verbose", help="verbose", default=False)
-parser.add_option("-t", action="store_true", dest="telluric", help="telluric correction", default=False)
 
 try:
     options,args = parser.parse_args(sys.argv[1:])
@@ -162,7 +167,8 @@ if options.verbose:
     print 'Input directory: ', options.inputdir
     print 'Object name: ', options.object
     print 'Spectrum type: ', options.spectype
-    print 'Telluric correction: ', options.telluric
+    print 'Input template spectrum: ', options.template
+    print 'File with wavelength ranges: ', options.wavemask
 
 velocity_step = 0.2
 
@@ -185,12 +191,15 @@ ccf_mask = ispec.read_cross_correlation_mask(mask_file)
 telluric_linelist_file = ispec_dir + "/input/linelists/CCF/Synth.Tellurics.500_1100nm/mask.lst"
 telluric_linelist = ispec.read_telluric_linelist(telluric_linelist_file, minimum_depth=0.0)
 
-resolution = 65000
+resolution = 80000
 
 #--- Below it loads and sets up the template spectrum ---------
 #templatefile = "/Users/edermartioli/Desktop/51Peg/testdata/1603681o.m.fits.gz"
 templatefile = "/Users/edermartioli/Desktop/51Peg/testdata/1604052o.m.fits.gz"
-templatespectrum = loadtemplatespectrum(templatefile, resolution, telluric_linelist, ccf_mask, velocity_step)
+
+if options.template :
+    templatefile = options.template
+    templatespectrum = loadtemplatespectrum(templatefile, resolution, telluric_linelist, ccf_mask, velocity_step, options.wavemask)
 #---------------
 
 output = []
@@ -200,7 +209,10 @@ for filepath in filelist :
     
     if options.verbose: print "Loading spectrum file: ", filename
 
-    spc = Spectrum(filepath, options.spectype, False, options.telluric, False)
+    spc = Spectrum(filepath, options.spectype)
+ 
+    if options.wavemask :
+        spc.applyMask(options.wavemask)
 
     barycentricTime = spc.barycentricTime()
     if options.verbose: print "Barycentric Time: ",barycentricTime
@@ -219,11 +231,11 @@ for filepath in filelist :
 
     ispectrum = ispec.create_spectrum_structure(spc.wl,spc.flux)
 
-
     if options.verbose: print "Smoothing out spectrum to resolution: ", resolution
     smoothed_star_spectrum = ispec.convolve_spectrum(ispectrum, resolution)
 
 
+    #--- Calculating RV shift from telluric lines -------------------------------------------
     if options.verbose: print "Calculating RV shift from telluric lines ..."
     tel_models, tel_ccf = ispec.cross_correlate_with_mask(smoothed_star_spectrum, telluric_linelist, \
                                               lower_velocity_limit=-10, upper_velocity_limit=10, \
@@ -233,9 +245,11 @@ for filepath in filelist :
     tel_rv = tel_models[0].mu()
     tel_rv_err = tel_models[0].emu()
     #plt.errorbar(tel_ccf['x'],tel_ccf['y'],yerr=tel_ccf['err'], fmt='o')
-
     if options.verbose: print "Telluric RV shift = ",tel_rv,"+/-",tel_rv_err
+    #-----
 
+    #--- Cleaning telluric regions -------------------------------------------
+    if options.verbose: print "Cleaning telluric regions ..."
     min_vel = -30.0
     max_vel = +30.0
     # Only the 25% of the deepest ones:
@@ -243,10 +257,8 @@ for filepath in filelist :
     tfilter = ispec.create_filter_for_regions_affected_by_tellurics(smoothed_star_spectrum['waveobs'], \
                                                                     telluric_linelist[dfilter], min_velocity=-tel_rv+min_vel, \
                                                                     max_velocity=-tel_rv+max_vel)
-        
-                                                                    
     clean_spectrum = smoothed_star_spectrum[~tfilter]
-                                                                    
+    #-----
 
     #--- Correcting telluric shift -------------------------------------------
     if options.verbose: print "Correcting RV shift calculated from telluric lines ..."
@@ -257,33 +269,28 @@ for filepath in filelist :
     if options.verbose: print "Correcting barycentric velocity ..."
     corrected_spectrum = ispec.correct_velocity(corrected_spectrum, -barycentric_vel)
     #-----
-    '''
-    models, ccf = ispec.cross_correlate_with_mask(corrected_spectrum, ccf_mask, \
+
+    #--- Calculating cross-correlation for RV measurements ------------------------
+    if options.template :
+        if options.verbose: print "Calculating radial velocity by cross-correlation with template spectrum ..."
+        models, ccf = ispec.cross_correlate_with_template(corrected_spectrum, templatespectrum,  \
+                                            lower_velocity_limit=-100, upper_velocity_limit=100, \
+                                            velocity_step=velocity_step, fourier=False)
+    
+    else :
+        if options.verbose: print "Calculating radial velocity by cross-correlation with lines mask ..."
+        models, ccf = ispec.cross_correlate_with_mask(corrected_spectrum, ccf_mask, \
                                                   lower_velocity_limit=-100, upper_velocity_limit=100, \
                                                   velocity_step=velocity_step, mask_depth=0.01, \
                                                   fourier=False)
-
-    plt.errorbar(ccf['x'],ccf['y'],yerr=ccf['err'], fmt='o')
-
     rv = models[0].mu()
     rv_err = models[0].emu()
 
     if options.verbose: print "RV shift = ",rv,"+/-",rv_err
-    '''
-
-    if options.verbose: print "Calculating radial velocity by cross-correlation with mask ..."
-    models, ccf = ispec.cross_correlate_with_template(corrected_spectrum, templatespectrum, \
-                                              lower_velocity_limit=-100, upper_velocity_limit=100, \
-                                              velocity_step=velocity_step, fourier=False)
-
-    rv = models[0].mu()
-    rv_err = models[0].emu()
 
     #plt.errorbar(ccf['x'],ccf['y'],yerr=ccf['err'], fmt='o')
-
-    if options.verbose: print "RV shift = ",rv,"+/-",rv_err
-
     #plt.show()
+    #-----
 
     writeoutputfits(ccf, filename, rv, rv_err, barycentricTime.jd)
 
