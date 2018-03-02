@@ -41,7 +41,7 @@ import ispec
 ################################################################################
 
 #--- Function to write cross-correlation plot to output fits ---------
-def writeoutputfits(ccf,filename,rv,rv_err,bjd):
+def writeoutputfits(ccf,filename,rv,rv_err,bjd,snr):
     
     if ".fits.gz" in filename :
         basename = os.path.splitext(os.path.splitext(filename)[0])[0]
@@ -61,6 +61,8 @@ def writeoutputfits(ccf,filename,rv,rv_err,bjd):
 
     hdulist[0].header.set('RV',rv, 'radial velocity (kps)')
     hdulist[0].header.set('RVERR',rv_err, 'radial velocity error (kps)')
+
+    hdulist[0].header.set('SNR',snr, 'mean signal-to-noise ratio')
 
     hdulist[0].header.set('COL1','Radial Velocity', 'radial velocity (kps)')
     hdulist[0].header.set('COL2','Cross-correlation', 'cross-correlation')
@@ -103,6 +105,7 @@ def barycentric_velocity(spc):
 def loadtemplatespectrum(filename, resolution, telluric_linelist, ccf_mask, velocity_step, wavemask):
     
     spc = Spectrum(filename)
+    
     if wavemask :
         spc.applyMask(wavemask)
 
@@ -210,9 +213,13 @@ for filepath in filelist :
     if options.verbose: print "Loading spectrum file: ", filename
 
     spc = Spectrum(filepath, options.spectype)
- 
+    
     if options.wavemask :
         spc.applyMask(options.wavemask)
+
+    snrmask = np.where(spc.fluxerr > 1.0)
+    snr = np.mean(spc.flux[snrmask] / spc.fluxerr[snrmask])
+    if options.verbose: print "Mean SNR: ",snr
 
     barycentricTime = spc.barycentricTime()
     if options.verbose: print "Barycentric Time: ",barycentricTime
@@ -292,15 +299,15 @@ for filepath in filelist :
     #plt.show()
     #-----
 
-    writeoutputfits(ccf, filename, rv, rv_err, barycentricTime.jd)
+    writeoutputfits(ccf, filename, rv, rv_err, barycentricTime.jd, snr)
 
     if options.verbose:
         print "Writing output:"
-        print filename, spc.object.replace(" ",""), np.round(barycentricTime.jd, 6), np.round(rv, 5), np.round(rv_err, 3)
+        print filename, spc.object.replace(" ",""), np.round(barycentricTime.jd, 6), np.round(rv, 5), np.round(rv_err, 3), snr
     
-    output.append([filename, spc.object.replace(" ",""), barycentricTime.jd, rv, rv_err])
+    output.append([filename, spc.object.replace(" ",""), barycentricTime.jd, rv, rv_err, snr])
 
 for result in output :
-    print result[0], result[1], np.round(result[2], 6), np.round(result[3], 5), np.round(result[4], 3)
+    print result[0], result[1], np.round(result[2], 6), np.round(result[3], 5), np.round(result[4], 3), np.round(result[5], 1)
 
 
