@@ -13,7 +13,7 @@
     INPE / Laboratorio Nacional de Astrofisica, Brazil.
     
     Simple usage example:
-    python $PATH/App_RadialVelocity.py --inputdir=./espectrosflux/ --spectype=raw --object="AM Her" -tr
+    python $PATH/App_RadialVelocity.py --inputdir=./espectrosflux/ --wavemask=./auxdata/ESPaDOnS_OrderWavelengthRangesForRV.txt --spectype=raw --object="AM Her" -tr
     """
 
 __version__ = "1.0"
